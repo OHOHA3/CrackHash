@@ -1,0 +1,43 @@
+services:
+  crack-manager:
+    build:
+      context: ./CrackManager
+      dockerfile: Dockerfile
+    image: crack-manager
+    environment:
+      - WORKER_NUM=3
+      - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
+      - TASK_MAX=5
+    ports:
+      - "8080:8080"
+
+  crack-worker-1:
+    build:
+      context: ./CrackWorker
+      dockerfile: Dockerfile
+    image: crack-worker
+    environment:
+      - SERVER_PORT=8081
+    ports:
+      - "8081:8081"
+
+  crack-worker-2:
+    build:
+      context: ./CrackWorker
+      dockerfile: Dockerfile
+    image: crack-worker
+    environment:
+      - SERVER_PORT=8082
+    ports:
+      - "8082:8082"
+
+  crack-worker-3:
+    build:
+      context: ./CrackWorker
+      dockerfile: Dockerfile
+    image: crack-worker
+    environment:
+      - SERVER_PORT=8083
+    ports:
+      - "8083:8083"
+

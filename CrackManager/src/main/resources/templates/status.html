@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>show task info</title>
+</head>
+<body>
+<p th:text="${'Status: ' + response.status()}">VALUE</p>
+<p th:text="${'Complete: ' + #numbers.formatDecimal(response.complete() * 100, 1, 2) + '%'}">VALUE</p>
+<p th:text="${'Data: ' + response.data()}">VALUE</p>
+
+</body>
+</html>

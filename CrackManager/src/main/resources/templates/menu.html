@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Crack Hash Manager</title>
+</head>
+<body>
+
+<h2>Отправка запроса на взлом хэша</h2>
+<form action="/api/hash/crack" method="post" th:object="${crackRequest}">
+    <label for="hash">Хэш:</label>
+    <input type="text" id="hash" th:field="*{hash}" required>
+    <br>
+    <label for="maxLength">Максимальная длина:</label>
+    <input type="number" id="maxLength" th:field="*{maxLength}" required>
+    <br>
+    <button type="submit">Отправить</button>
+</form>
+
+<div th:if="${lastTaskId != null and not #strings.isEmpty(lastTaskId)}">
+    <hr>
+    <p>
+        Последний запрос:
+        <a th:href="@{/api/hash/status(requestId=${lastTaskId})}" th:text="${lastTaskId}"></a>
+    </p>
+</div>
+
+<hr>
+
+<h2>Список задач</h2>
+<ul>
+    <li th:each="taskId : ${taskIds}">
+        <a th:href="@{/api/hash/status(requestId=${taskId})}" th:text="${taskId}"></a>
+    </li>
+</ul>
+
+</body>
+</html>
