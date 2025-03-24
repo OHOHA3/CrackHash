@@ -20,6 +20,9 @@ build/
 target/
 dist/
 
+# Gradle
+.gradle
+
 # Astah
 *.lock
 
