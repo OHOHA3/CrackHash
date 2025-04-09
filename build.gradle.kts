@@ -15,6 +15,22 @@ subprojects {
     }
 }
 
+tasks.register<Exec>("crackHashStart") {
+    group = "deploy"
+    description = "Запуск контейнеров"
+
+    dependsOn(subprojects.map { it.tasks.named("build") })
+    dependsOn("crackHashStop")
+    commandLine("docker-compose", "up", "-d", "--build")
+}
+
+tasks.register<Exec>("crackHashStop") {
+    group = "deploy"
+    description = "Остановка контейнеров"
+
+    commandLine("docker-compose", "down", "--rmi", "all")
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
 }

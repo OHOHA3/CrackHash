@@ -46,6 +46,10 @@ tasks.register<JavaExec>("xjcResponse") {
     )
 }
 
+tasks.named("build"){
+    dependsOn("xjcRequest", "xjcResponse")
+}
+
 tasks.test {
     useJUnitPlatform()
 }
