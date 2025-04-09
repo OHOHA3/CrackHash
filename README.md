@@ -12,9 +12,14 @@
 
 ## Запуск
 
-Запустите систему с помощью Docker Compose:
+Запустите систему с помощью Gradle:
    ```sh
-   docker-compose up --build
+   gradle crackHashStart
    ```
 
 После успешного запуска менеджер будет доступен на `http://localhost:8080/api/crack`. Воркеры автоматически подключатся и начнут обработку задач.
+
+Для прекращения работы введите:
+```sh
+gradle crackHashStop
+```
