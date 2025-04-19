@@ -1,43 +1,180 @@
 services:
-  crack-manager:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - crack-net
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+
+  mongo-1:
+    image: mongo:6.0
+    container_name: mongo-1
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    networks:
+      - crack-net
+    volumes:
+      - mongo-data-1:/data/db
+
+  mongo-2:
+    image: mongo:6.0
+    container_name: mongo-2
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    networks:
+      - crack-net
+    volumes:
+      - mongo-data-2:/data/db
+
+  mongo-3:
+    image: mongo:6.0
+    container_name: mongo-3
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27019:27017"
+    networks:
+      - crack-net
+    volumes:
+      - mongo-data-3:/data/db
+
+  mongo-init:
+    image: mongo:6.0
+    container_name: mongo-init
+    depends_on:
+      - mongo-1
+      - mongo-2
+      - mongo-3
+    networks:
+      - crack-net
+    entrypoint: >
+      bash -c "until mongosh --host mongo-1:27017 --eval 'db.adminCommand({ping: 1})' > /dev/null 2>&1; do
+                echo 'Waiting for mongo-1...'; sleep 2;
+              done;
+              echo 'Mongo-1 available. Initiating replica set...';
+              echo \"rs.initiate({
+                _id: 'rs0',
+                members: [
+                  { _id: 0, host: 'mongo-1:27017' },
+                  { _id: 1, host: 'mongo-2:27017' },
+                  { _id: 2, host: 'mongo-3:27017' }
+                ]
+              });\" | mongosh --host mongo-1:27017"
+    restart: "no"
+
+  manager:
     build:
       context: ./CrackManager
       dockerfile: Dockerfile
-    image: crack-manager
+    image: manager
+    container_name: manager
     environment:
-      - WORKER_NUM=3
+      - SERVER_PORT=8080
+      - MONGODB_URI=mongodb://mongo-1:27017,mongo-2:27017,mongo-3:27017/crack_hash?replicaSet=rs0
+      - WORKER_URLS=http://worker-1:8081,http://worker-2:8082,http://worker-3:8083
       - ALPHABET=abcdefghijklmnopqrstuvwxyz0123456789
-      - TASK_MAX=5
+      - MAX_WORKING_TASKS=5
+      - TIME_FOR_STOP_TASK=60
+      - CHECKING_TIMEOUT_RATE=120000
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      - RABBIT_PASSWORD=admin
+      - RABBIT_USERNAME=admin
+      - RABBIT_TASK_EXCHANGE=task_exchange
+      - RABBIT_TASK_QUEUE=task_queue
+      - RABBIT_TASK_KEY=task_key
+      - RABBIT_RESULT_EXCHANGE=result_exchange
+      - RABBIT_RESULT_QUEUE=result_queue
+      - RABBIT_RESULT_KEY=result_key
     ports:
       - "8080:8080"
+    depends_on:
+      - mongo-1
+      - mongo-2
+      - mongo-3
+    networks:
+      - crack-net
 
-  crack-worker-1:
+  worker-1:
     build:
       context: ./CrackWorker
       dockerfile: Dockerfile
-    image: crack-worker-1
+    image: worker
+    container_name: worker-1
     environment:
       - SERVER_PORT=8081
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      - RABBIT_PASSWORD=admin
+      - RABBIT_USERNAME=admin
+      - RABBIT_TASK_EXCHANGE=task_exchange
+      - RABBIT_TASK_QUEUE=task_queue
+      - RABBIT_TASK_KEY=task_key
+      - RABBIT_RESULT_EXCHANGE=result_exchange
+      - RABBIT_RESULT_QUEUE=result_queue
+      - RABBIT_RESULT_KEY=result_key
     ports:
       - "8081:8081"
+    networks:
+      - crack-net
+    restart: always
 
-  crack-worker-2:
-    build:
-      context: ./CrackWorker
-      dockerfile: Dockerfile
-    image: crack-worker-2
+  worker-2:
+    image: worker
+    container_name: worker-2
     environment:
       - SERVER_PORT=8082
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      - RABBIT_PASSWORD=admin
+      - RABBIT_USERNAME=admin
+      - RABBIT_TASK_EXCHANGE=task_exchange
+      - RABBIT_TASK_QUEUE=task_queue
+      - RABBIT_TASK_KEY=task_key
+      - RABBIT_RESULT_EXCHANGE=result_exchange
+      - RABBIT_RESULT_QUEUE=result_queue
+      - RABBIT_RESULT_KEY=result_key
     ports:
       - "8082:8082"
+    networks:
+      - crack-net
+    restart: always
 
-  crack-worker-3:
-    build:
-      context: ./CrackWorker
-      dockerfile: Dockerfile
-    image: crack-worker-3
+  worker-3:
+    image: worker
+    container_name: worker-3
     environment:
       - SERVER_PORT=8083
+      - RABBIT_HOST=rabbitmq
+      - RABBIT_PORT=5672
+      - RABBIT_PASSWORD=admin
+      - RABBIT_USERNAME=admin
+      - RABBIT_TASK_EXCHANGE=task_exchange
+      - RABBIT_TASK_QUEUE=task_queue
+      - RABBIT_TASK_KEY=task_key
+      - RABBIT_RESULT_EXCHANGE=result_exchange
+      - RABBIT_RESULT_QUEUE=result_queue
+      - RABBIT_RESULT_KEY=result_key
     ports:
       - "8083:8083"
+    networks:
+      - crack-net
+    restart: always
 
+networks:
+  crack-net:
+    driver: bridge
+
+volumes:
+  mongo-data-1:
+  mongo-data-2:
+  mongo-data-3:
+  rabbit-data:

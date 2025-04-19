@@ -1,13 +1,13 @@
 package ru.nsu.leontev.service;
 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.paukov.combinatorics3.Generator;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 import ru.nsu.leontev.request.CrackHashManagerRequest;
 import ru.nsu.leontev.response.CrackHashWorkerResponse;
+import ru.nsu.leontev.service.broker.ResultSenderService;
+import ru.nsu.leontev.service.data.TaskInfo;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,32 +16,39 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class CrackWorkerService {
-    private static final ConcurrentHashMap<UUID, TaskInfo> TASKS = new ConcurrentHashMap<>();
-    private final RestTemplate restTemplate;
-    @Value("${manager.url}")
-    private String managerUrl;
+    private static final ConcurrentHashMap<UUID, ConcurrentHashMap<Integer, TaskInfo>> TASKS = new ConcurrentHashMap<>();
+    private final ResultSenderService resultSenderService;
 
-    @Autowired
-    public CrackWorkerService(RestTemplate restTemplate) {
-        this.restTemplate = restTemplate;
+    public void handleTask(CrackHashManagerRequest request) {
+        UUID requestId = UUID.fromString(request.getRequestId());
+
+        if (TASKS.containsKey(requestId)) {
+            if (TASKS.get(requestId).containsKey(request.getPartNumber())) {
+                return;
+            }
+        }
+        TASKS.computeIfAbsent(requestId, k -> new ConcurrentHashMap<>())
+                .put(request.getPartNumber(), new TaskInfo());
+        crackHash(request);
     }
 
-    @Async
-    public void crackHash(CrackHashManagerRequest request) {
+
+    private void crackHash(CrackHashManagerRequest request) {
         String taskId = request.getRequestId();
         List<String> alphabet = request.getAlphabet().getSymbols();
         int partNumber = request.getPartNumber();
         int partCount = request.getPartCount();
         int maxLength = request.getMaxLength();
 
-        long totalCombs = countTotalCombs(maxLength, alphabet.size());
+        long totalCombs = (long) (Math.pow(alphabet.size(), maxLength + 1) - alphabet.size()) / (alphabet.size() - 1);
         long partSize = totalCombs / partCount;
         long startIndex = partNumber * partSize;
         long endIndex = (partNumber == partCount - 1) ? totalCombs : startIndex + partSize;
 
-        TaskInfo taskInfo = new TaskInfo();
-        TASKS.put(UUID.fromString(taskId), taskInfo);
+        TaskInfo taskInfo = TASKS.get(UUID.fromString(taskId)).get(partNumber);
 
         for (int len = 1; len <= maxLength; len++) {
             Generator.permutation(alphabet).withRepetitions(len).stream()
@@ -53,14 +60,6 @@ public class CrackWorkerService {
                     .forEach(taskInfo::addMatch);
         }
         sendResponse(prepareResponse(taskId, partNumber, taskInfo));
-    }
-
-    private long countTotalCombs(int maxLength, int alphabetSize) {
-        long totalCombs = 0;
-        for (int i = 0; i < maxLength; i++) {
-            totalCombs = (totalCombs + 1) * alphabetSize;
-        }
-        return totalCombs;
     }
 
     private String hash(String input) {
@@ -89,10 +88,14 @@ public class CrackWorkerService {
     }
 
     public TaskInfo getTaskInfo(String taskId) {
-        return TASKS.get(UUID.fromString(taskId));
+        if (!TASKS.containsKey(UUID.fromString(taskId))) {
+            return new TaskInfo();
+        }
+        return TASKS.get(UUID.fromString(taskId)).values().stream().reduce(TaskInfo::add).orElse(new TaskInfo());
     }
 
     private void sendResponse(CrackHashWorkerResponse response) {
-        restTemplate.postForObject(managerUrl, response, Void.class);
+        log.info("send response {}", response);
+        resultSenderService.publish(response);
     }
 }

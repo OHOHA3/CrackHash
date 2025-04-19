@@ -20,7 +20,7 @@ tasks.register<Exec>("crackHashStart") {
     description = "Запуск контейнеров"
 
     dependsOn(subprojects.map { it.tasks.named("build") })
-    dependsOn("crackHashStop")
+
     commandLine("docker-compose", "up", "-d", "--build")
 }
 
@@ -28,7 +28,7 @@ tasks.register<Exec>("crackHashStop") {
     group = "deploy"
     description = "Остановка контейнеров"
 
-    commandLine("docker-compose", "down", "--rmi", "all")
+    commandLine("docker-compose", "down", "--rmi", "all", "-v", "--remove-orphans")
 }
 
 tasks.withType<Test> {

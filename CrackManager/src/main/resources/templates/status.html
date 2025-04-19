@@ -5,8 +5,10 @@
     <title>show task info</title>
 </head>
 <body>
+<p th:text="${'Hash: ' + response.hash()}">VALUE</p>
+<p th:text="${'Alphabet: ' + response.alphabet()}">VALUE</p>
 <p th:text="${'Status: ' + response.status()}">VALUE</p>
-<p th:text="${'Complete: ' + #numbers.formatDecimal(response.complete() * 100, 1, 2) + '%'}">VALUE</p>
+<p th:text="${'Complete: ' + #numbers.formatDecimal((response.complete() * 100 > 100 ? 100.0 : response.complete() * 100), 1, 2) + '%'}">VALUE</p>
 <p th:text="${'Data: ' + response.data()}">VALUE</p>
 
 </body>
