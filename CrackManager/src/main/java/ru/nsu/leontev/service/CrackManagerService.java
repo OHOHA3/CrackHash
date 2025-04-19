@@ -1,129 +1,89 @@
 package ru.nsu.leontev.service;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.env.Environment;
-import org.springframework.scheduling.annotation.Scheduled;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.AmqpException;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-import ru.nsu.leontev.request.CrackHashManagerRequest;
-import ru.nsu.leontev.rest.exception.TaskNotFoundException;
-import ru.nsu.leontev.rest.userinteraction.model.CompleteResponse;
-import ru.nsu.leontev.rest.userinteraction.model.Status;
+import org.springframework.transaction.annotation.Transactional;
+import ru.nsu.leontev.AppContext;
+import ru.nsu.leontev.db.entity.TaskInfo;
+import ru.nsu.leontev.model.CompleteResponse;
+import ru.nsu.leontev.model.CrackStatusResponse;
+import ru.nsu.leontev.model.Status;
 
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class CrackManagerService {
-    private static final ConcurrentHashMap<UUID, TaskInfo> TASKS = new ConcurrentHashMap<>();
-    private static final ConcurrentLinkedQueue<TaskInfo> WAITING_TASKS = new ConcurrentLinkedQueue<>();
-    private final RestTemplate restTemplate;
-    private final EndpointSolver endpointSolver;
-    private final Environment env;
-    private final int numWorkers;
-    private final String alphabetLetters;
-
-    @Autowired
-    public CrackManagerService(RestTemplate restTemplate, EndpointSolver endpointSolver, Environment env) {
-        this.restTemplate = restTemplate;
-        this.endpointSolver = endpointSolver;
-        this.env = env;
-        numWorkers = env.getProperty("worker.num", Integer.class);
-        alphabetLetters = env.getProperty("alphabet", String.class);
-    }
+    private static final double FULLY_COMPLETE = 1.0;
+    private final TaskInfoService taskInfoService;
+    private final WorkerService workerService;
+    private final AppContext appContext;
 
     public String handleTask(String hash, int maxLength) {
-        UUID taskId = UUID.randomUUID();
-        TaskInfo taskInfo = new TaskInfo(taskId.toString(), hash, maxLength, numWorkers, alphabetLetters);
-        if (isFullTaskQueue()) {
-            WAITING_TASKS.add(taskInfo);
-        } else {
+        String taskId = UUID.randomUUID().toString();
+        TaskInfo taskInfo = new TaskInfo(taskId, hash, maxLength, appContext.getNumWorkers(),
+                appContext.getAlphabet());
+        if (taskInfoService.canStartTask()) {
             startTask(taskInfo);
+        } else {
+            postponeTask(taskInfo);
         }
-        return taskId.toString();
+        return taskId;
+    }
+
+    private void postponeTask(TaskInfo taskInfo) {
+        taskInfo.setStatus(Status.WAITING);
+        taskInfoService.save(taskInfo);
     }
 
     private void startTask(TaskInfo taskInfo) {
-        String taskId = taskInfo.getId();
-        taskInfo.setCreatedAt(LocalDateTime.now());
-        TASKS.put(UUID.fromString(taskId), taskInfo);
-
-        for (int i = 0; i < numWorkers; i++) {
-            CrackHashManagerRequest request = prepareRequest(taskId, taskInfo.getHash(), taskInfo.getMaxLength(), i);
-            String workerUrl = endpointSolver.getTaskEndpoint(i);
-            restTemplate.postForObject(workerUrl, request, String.class);
+        taskInfo.setStatus(Status.IN_PROGRESS);
+        taskInfo.setStartedAt(LocalDateTime.now());
+        taskInfoService.save(taskInfo);
+        try {
+            workerService.sendTaskRequest(taskInfo);
+        } catch (AmqpException e) {
+            log.error("rabbit dead");
+            postponeTask(taskInfo);
         }
     }
 
-    private CrackHashManagerRequest prepareRequest(String taskId, String hash, int maxLength, int partNumber) {
-        CrackHashManagerRequest request = new CrackHashManagerRequest();
-        request.setRequestId(taskId);
-        request.setPartNumber(partNumber);
-        request.setPartCount(numWorkers);
-        request.setHash(hash);
-        request.setMaxLength(maxLength);
-        CrackHashManagerRequest.Alphabet alphabet = new CrackHashManagerRequest.Alphabet();
-        alphabet.getSymbols().addAll(List.of(alphabetLetters.split("")));
-        request.setAlphabet(alphabet);
-        return request;
-    }
-
+    @Transactional
     public void handleTaskResult(String requestId, int partNumber, long combChecked, List<String> words) {
-        TaskInfo taskInfo = getTaskInfo(requestId);
+        TaskInfo taskInfo = taskInfoService.findById(requestId);
         taskInfo.getData().addAll(words);
-        taskInfo.setWordsComplete(combChecked, partNumber);
-        taskInfo.setStatus(Status.READY, partNumber);
-        if (!isFullTaskQueue() && !WAITING_TASKS.isEmpty()) {
-            startTask(WAITING_TASKS.poll());
+        taskInfo.getWordsComplete()[partNumber] = combChecked;
+        System.out.println(taskInfo.getComplete());
+        if (taskInfo.getComplete() >= 1d) {
+            taskInfo.setStatus(Status.READY);
+        }
+        taskInfoService.save(taskInfo);
+        if (taskInfoService.canStartTask()) {
+            taskInfoService.findFirstByStatus(Status.WAITING).ifPresent(this::startTask);
         }
     }
 
-    public TaskInfo getTaskStatus(String taskId) {
-        TaskInfo taskInfo = getTaskInfo(taskId);
-        for (int i = 0; i < numWorkers; i++) {
-            if (taskInfo.getPartStatus(i) == Status.IN_PROGRESS) {
-                String workerUrl = endpointSolver.getStatusEndpoint(i, taskId);
-                CompleteResponse completeResponse = restTemplate.getForObject(workerUrl, CompleteResponse.class);
-                taskInfo.setWordsComplete(completeResponse.checkedCombs(), i);
-                taskInfo.getData().addAll(completeResponse.matches());
-            }
+    public CrackStatusResponse getTaskStatus(String requestId) {
+        TaskInfo taskInfo = taskInfoService.findById(requestId);
+        double complete;
+        if (taskInfo.getStatus() == Status.READY) {
+            complete = FULLY_COMPLETE;
+        } else {
+            CompleteResponse completeResponse = workerService.getTaskStatus(requestId);
+            long allCombs = (long) (Math.pow(taskInfo.getAlphabet().length(), taskInfo.getMaxLength() + 1)
+                    - taskInfo.getAlphabet().length()) / (taskInfo.getAlphabet().length() - 1);
+            complete = completeResponse.checkedCombs() / (double) allCombs;
         }
-        return taskInfo;
-    }
-    public TaskInfo getTaskInfo(String taskId) {
-        UUID uuid = UUID.fromString(taskId);
-        TaskInfo taskInfo = TASKS.get(uuid);
-        if (taskInfo == null) {
-            throw new TaskNotFoundException("Task with id " + taskId + " not found");
-        }
-        return taskInfo;
-    }
-
-    public List<UUID> getTaskIds() {
-        return TASKS.keySet().stream().toList();
-    }
-
-    private boolean isFullTaskQueue() {
-        int maxTasks = env.getProperty("task.max", Integer.class);
-        return TASKS.values().stream()
-                .filter(task -> task.getStatus() == Status.IN_PROGRESS).count() == maxTasks;
-    }
-
-    @Scheduled(fixedRate = 5000)
-    public void checkTaskTimeouts() {
-        LocalDateTime now = LocalDateTime.now();
-        for (TaskInfo task : TASKS.values()) {
-            if (ChronoUnit.SECONDS.between(task.getCreatedAt(), now) > 15) {
-                for (int i = 0; i < numWorkers; i++) {
-                    if (task.getPartStatus(i) == Status.IN_PROGRESS) {
-                        task.setStatus(Status.ERROR, i);
-                    }
-                }
-            }
-        }
+        return new CrackStatusResponse(
+                taskInfo.getHash(),
+                taskInfo.getAlphabet(),
+                taskInfo.getStatus(),
+                complete,
+                taskInfo.getData().toArray(new String[0]));
     }
 }
